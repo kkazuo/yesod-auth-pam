@@ -1,55 +1,52 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE RankNTypes        #-}
 
 module Yesod.Auth.Pam (authPam) where
 
-import Control.Applicative ((<$>), (<*>))
-import Data.Text (unpack)
-import System.Posix.PAM (authenticate)
-import Text.Hamlet (hamlet)
-import Yesod.Auth (
-    AuthPlugin(..),
-    Creds(..),
-    Route(..),
-    loginErrorMessage,
-    setCreds)
-import Yesod.Core (
-    lift,
-    liftIO,
-    notFound,
-    toWidget)
-import Yesod.Form (
-    iopt,
-    runInputPost,
-    textField)
+import           Data.Text          (Text, unpack)
+import           System.Posix.PAM   as PAM (authenticate)
+import           Yesod.Auth
+import qualified Yesod.Auth.Message as Msg
+import           Yesod.Core
+import           Yesod.Form         (iopt, runInputPost, textField)
 
+pid :: Text
 pid = "posixpam"
 
-authPam =
-    AuthPlugin pid dispatch login
-  where
-    dispatch "POST" [] = do
-        input <- lift $ runInputPost $ (,)
-                 <$> iopt textField "ident"
-                 <*> iopt textField "password"
-        case input of
-            (Just ident, Just password) -> do
-                auth <- validate ident password
-                either failed (success ident) auth
-            _ ->
-                failed undefined
-    dispatch _ _ = notFound
+authPam :: AuthPlugin master
+authPam = AuthPlugin pid dispatch login
 
-    validate ident password =
-        liftIO $ authenticate "auth" (unpack ident) (unpack password)
+dispatch :: Text -> [Text] -> AuthHandler master TypedContent
+dispatch "POST" [] = do
+    input <- lift $ runInputPost $ (,)
+                <$> iopt textField "ident"
+                <*> iopt textField "password"
+    case input of
+        (Just ident, Just password) -> do
+            auth <- validate ident password
+            either (failed . Just) (const (success ident)) auth
+        _ -> failed Nothing
+dispatch _ _ = notFound
 
-    success ident _ =
-        lift $ setCreds True $ Creds pid ident []
-    failed _ =
-        loginErrorMessage LoginR "Login failed."
+validate :: Text -> Text -> HandlerT Auth (HandlerT master IO) (Either Int ())
+validate ident password =
+    liftIO $ PAM.authenticate "auth" (unpack ident) (unpack password)
 
-    url = PluginR pid []
-    login toMaster =
+success :: YesodAuth master => Text -> HandlerT Auth (HandlerT master IO) TypedContent
+success ident = lift $ setCredsRedirect $ Creds pid ident []
+
+failed :: YesodAuth master => Maybe Int -> HandlerT Auth (HandlerT master IO) TypedContent
+failed _ = do
+    mr <- lift getMessageRender
+    setMessage $ toHtml $ mr Msg.InvalidUsernamePass
+    redirect LoginR
+
+url :: Route Auth
+url = PluginR pid []
+
+login :: MonadWidget m => (Route Auth -> Route (HandlerSite m)) -> m ()
+login toMaster =
         toWidget [hamlet|
 $newline never
     <div #pamlogin>
