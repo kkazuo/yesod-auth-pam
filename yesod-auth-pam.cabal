@@ -59,7 +59,6 @@ library
 
   -- Other library packages from which modules are imported.
   build-depends:       base <5
-                     , hamlet
                      , pam
                      , text
                      , yesod-auth
